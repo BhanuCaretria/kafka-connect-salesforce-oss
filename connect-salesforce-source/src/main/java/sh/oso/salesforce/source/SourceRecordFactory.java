@@ -11,6 +11,7 @@ import sh.oso.salesforce.pubsub.ChangeEventUtils;
 import sh.oso.salesforce.pubsub.DecodedEvent;
 import sh.oso.salesforce.schema.AvroToConnect;
 import sh.oso.salesforce.schema.CsvValueConverter;
+import sh.oso.salesforce.source.debezium.BeforeImageStore;
 
 import java.util.List;
 import java.util.Map;
@@ -60,10 +61,15 @@ final class SourceRecordFactory {
     private final Map<Schema, Schema> bulkSchemaCache =
             new ConcurrentHashMap<>();
 
-    SourceRecordFactory(String sobject, String topic) {
+    private final BeforeImageStore store;
+    private final SourceConfig config;
+
+    SourceRecordFactory(String sobject, String topic,BeforeImageStore store, SourceConfig config) {
         this.sobject = sobject;
         this.topic = topic;
         this.partition = SObjectOffset.partition(sobject);
+        this.store = store;
+        this.config = config;
     }
 
     /**
@@ -203,34 +209,63 @@ final class SourceRecordFactory {
             }
         }
 
-        ConnectHeaders headers =
-                cdcHeaders(
-                        event,
-                        header,
-                        changeType
-                );
+        if (config.recordFormat()
+                == SourceConfig.RecordFormat.LEGACY) {
+
+            ConnectHeaders headers =
+                    cdcHeaders(
+                            event,
+                            header,
+                            changeType);
+
+            return new SourceRecord(
+                    partition,
+                    offset,
+                    topic,
+                    null,
+                    Schema.STRING_SCHEMA,
+                    recordId,
+                    valueSchema,
+                    value,
+                    null,
+                    headers);
+
+        }
+
+        Struct before =store.get(sobject,recordId);
+        Struct source =
+                new Struct(
+                        buildSourceSchema());
+
+        source.put("connector","salesforce");
+        source.put("object",sobject);
+
+        Schema envelopeSchema = buildEnvelopeSchema(valueSchema);
+        Struct envelope =new Struct(envelopeSchema);
+        envelope.put("before",before);
+        envelope.put("after", "DELETE".equals(changeType) ? null : value);
+
+        envelope.put("op",debeziumOp(changeType));
+        envelope.put("ts_ms",(Long) header.get("commitTimestamp"));
+        envelope.put("source",source);
+
+        if ("DELETE".equals(changeType)) {
+            store.delete( sobject,recordId);
+        }
+        else {
+            store.put(sobject,recordId,value);
+        }
 
         return new SourceRecord(
                 partition,
                 offset,
                 topic,
                 null,
-
-                /*
-                 * Kafka message key
-                 */
                 Schema.STRING_SCHEMA,
                 recordId,
+                envelopeSchema,
+                envelope);
 
-                /*
-                 * Kafka message value
-                 */
-                valueSchema,
-                value,
-
-                null,
-                headers
-        );
     }
 
     /**
@@ -348,19 +383,121 @@ final class SourceRecordFactory {
         String recordId =
                 row.get("Id");
 
+        // Legacy mode
+        if (config.recordFormat()
+                == SourceConfig.RecordFormat.LEGACY) {
+
+            return new SourceRecord(
+                    partition,
+                    offset,
+                    topic,
+                    null,
+                    Schema.STRING_SCHEMA,
+                    recordId,
+                    valueSchema,
+                    value);
+        }
+
+        // Debezium mode
+        Struct before =store.get(sobject,recordId);
+        Struct source = new Struct(buildSourceSchema());
+        source.put("connector","salesforce");
+        source.put("object",sobject);
+        Schema envelopeSchema = buildEnvelopeSchema(valueSchema);
+        Struct envelope = new Struct(envelopeSchema);
+        envelope.put("before",before);
+        envelope.put("after","deleted".equals(eventType)? null:value);
+        envelope.put("op", debeziumBulkOp(eventType));
+        envelope.put("ts_ms",System.currentTimeMillis());
+        envelope.put("source",source);
+
+        // Maintain state store
+
+        if ("deleted".equals(eventType)) {
+            store.delete(sobject,recordId);
+        } else {
+            store.put(sobject, recordId, value);
+        }
+
         return new SourceRecord(
                 partition,
                 offset,
                 topic,
                 null,
-
                 Schema.STRING_SCHEMA,
                 recordId,
-
-                valueSchema,
-                value
-        );
+                envelopeSchema,
+                envelope);
     }
+
+    private String debeziumBulkOp(String eventType) {
+        return switch (eventType) {
+            case "snapshot" -> "r";
+            case "created" -> "c";
+            case "updated" -> "u";
+            case "deleted" -> "d";
+            default -> "u";
+        };
+    }
+    private Schema buildSourceSchema() {
+
+        return SchemaBuilder.struct()
+                .name("io.debezium.salesforce.Source")
+                .field(
+                        "connector",
+                        Schema.STRING_SCHEMA)
+                .field(
+                        "object",
+                        Schema.STRING_SCHEMA)
+                .build();
+    }
+
+    private Schema buildEnvelopeSchema(
+            Schema rowSchema) {
+
+        return SchemaBuilder.struct()
+                .name(sobject + ".Envelope")
+
+                .field(
+                        "before",
+                        rowSchema)
+
+                .field(
+                        "after",
+                        rowSchema)
+
+                .field(
+                        "op",
+                        Schema.STRING_SCHEMA)
+
+                .field(
+                        "ts_ms",
+                        Schema.INT64_SCHEMA)
+
+                .field(
+                        "source",
+                        buildSourceSchema())
+
+                .build();
+    }
+
+    private String debeziumOp(
+            String changeType) {
+
+        return switch (changeType) {
+
+            case "CREATE" -> "c";
+
+            case "UPDATE" -> "u";
+
+            case "DELETE" -> "d";
+
+            case "UNDELETE" -> "c";
+
+            default -> "u";
+        };
+    }
+
 
     /**
      * Builds Kafka Connect value schema for Salesforce CDC.

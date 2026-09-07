@@ -17,6 +17,7 @@ import sh.oso.salesforce.pubsub.PubSubSubscription;
 import sh.oso.salesforce.pubsub.SubscribeOptions;
 import sh.oso.salesforce.rest.RestClient;
 import sh.oso.salesforce.schema.DescribeToConnect;
+import sh.oso.salesforce.source.debezium.BeforeImageStore;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -56,9 +57,11 @@ final class SObjectPipeline implements AutoCloseable {
     private String activePollLocator;
     private long lastPollStartedAt;
     private Schema describeSchema;
+    private final BeforeImageStore store;
+
 
     SObjectPipeline(SourceConfig config, String sobject, RestClient rest, BulkQueryClient bulkQuery,
-                    PubSubClient pubsub, RateGovernor governor, Map<String, Object> storedOffset) {
+                    PubSubClient pubsub, RateGovernor governor, Map<String, Object> storedOffset, BeforeImageStore store) {
         this.config = config;
         this.sobject = sobject;
         this.cdcTopicName = buildCdcTopicName(sobject);
@@ -66,8 +69,10 @@ final class SObjectPipeline implements AutoCloseable {
         this.bulkQuery = bulkQuery;
         this.pubsub = pubsub;
         this.governor = governor;
-        this.records = new SourceRecordFactory(sobject, config.topicFor(sobject));
+        this.records = new SourceRecordFactory(sobject, config.topicFor(sobject),store,config);
         this.offset = SObjectOffset.fromMap(storedOffset);
+        this.store = store;
+
         if (offset.mode() == SObjectOffset.Mode.SNAPSHOT
                 && (storedOffset == null || storedOffset.isEmpty())) {
             if (!config.getBoolean(SourceConfig.SNAPSHOT_ENABLED)) {

@@ -12,6 +12,8 @@ import sh.oso.salesforce.http.SalesforceHttpClient;
 import sh.oso.salesforce.limits.RateGovernor;
 import sh.oso.salesforce.pubsub.PubSubClient;
 import sh.oso.salesforce.rest.RestClient;
+import sh.oso.salesforce.source.debezium.BeforeImageStore;
+import sh.oso.salesforce.source.debezium.InMemoryBeforeImageStore;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -26,6 +28,8 @@ public class SalesforceSourceTask extends SourceTask {
     private PubSubClient pubsub;
     private final List<SObjectPipeline> pipelines = new ArrayList<>();
 
+    private BeforeImageStore store;
+
     @Override
     public String version() {
         return Version.VERSION;
@@ -33,6 +37,8 @@ public class SalesforceSourceTask extends SourceTask {
 
     @Override
     public void start(Map<String, String> props) {
+
+        store = new InMemoryBeforeImageStore();
         config = new SourceConfig(props);
         SessionSupplier sessions = new SessionSupplier(
                 new SalesforceAuth(config.authConfig(), config.getString(SourceConfig.TOKEN_ENDPOINT)));
@@ -47,7 +53,7 @@ public class SalesforceSourceTask extends SourceTask {
         for (String sobject : config.taskSobjects()) {
             Map<String, Object> stored = context.offsetStorageReader()
                     .offset(SObjectOffset.partition(sobject));
-            pipelines.add(new SObjectPipeline(config, sobject, rest, bulkQuery, pubsub, governor, stored));
+            pipelines.add(new SObjectPipeline(config, sobject, rest, bulkQuery, pubsub, governor, stored, store));
         }
         LOG.info("Salesforce source task started for SObjects {}", config.taskSobjects());
     }

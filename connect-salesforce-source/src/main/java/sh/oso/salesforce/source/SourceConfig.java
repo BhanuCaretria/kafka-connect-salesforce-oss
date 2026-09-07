@@ -54,11 +54,15 @@ public class SourceConfig extends AbstractConfig {
     // Internal: SObjects assigned to one task (set by the connector, not users).
     public static final String TASK_SOBJECTS = "sf.task.sobjects";
 
+    public static final String RECORD_FORMAT = "sf.record.format";
+
     public enum RealtimeMode {EVENT_DRIVEN, POLLING}
 
     public enum EventStart {LATEST, ALL}
 
     public enum GapRecovery {RESYNC, LATEST, FAIL}
+
+    public enum RecordFormat {LEGACY, DEBEZIUM }
 
     public SourceConfig(Map<String, String> originals) {
         super(configDef(), originals);
@@ -128,7 +132,16 @@ public class SourceConfig extends AbstractConfig {
                 .define(TOKEN_ENDPOINT, Type.STRING, null, Importance.LOW,
                         "OAuth token endpoint override (testing only).")
                 .define(TASK_SOBJECTS, Type.LIST, "", Importance.LOW,
-                        "Internal: SObjects assigned to this task.");
+                        "Internal: SObjects assigned to this task.")
+                .define(RECORD_FORMAT,Type.STRING,"legacy",
+                        ConfigDef.ValidString.in("legacy","debezium"),Importance.HIGH,"Output record format");
+
+    }
+
+    public RecordFormat recordFormat() {
+        return RecordFormat.valueOf(
+                getString(RECORD_FORMAT)
+                        .toUpperCase(Locale.ROOT));
     }
 
     private void validateCombinations() {
