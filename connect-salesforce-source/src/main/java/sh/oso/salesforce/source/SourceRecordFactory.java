@@ -460,11 +460,11 @@ final class SourceRecordFactory {
 
                 .field(
                         "before",
-                        rowSchema)
+                        makeOptional(rowSchema))
 
                 .field(
                         "after",
-                        rowSchema)
+                        makeOptional(rowSchema))
 
                 .field(
                         "op",
@@ -479,6 +479,22 @@ final class SourceRecordFactory {
                         buildSourceSchema())
 
                 .build();
+    }
+
+    private Schema makeOptional(Schema schema) {
+
+        SchemaBuilder builder =
+                SchemaBuilder.struct()
+                        .optional()
+                        .name(schema.name() + ".optional");
+
+        for (Field field : schema.fields()) {
+            builder.field(
+                    field.name(),
+                    field.schema());
+        }
+
+        return builder.build();
     }
 
     private String debeziumOp(
