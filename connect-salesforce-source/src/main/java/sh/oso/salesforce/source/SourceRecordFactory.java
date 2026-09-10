@@ -7,6 +7,8 @@ import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.header.ConnectHeaders;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import sh.oso.salesforce.pubsub.ChangeEventUtils;
 import sh.oso.salesforce.pubsub.DecodedEvent;
 import sh.oso.salesforce.schema.AvroToConnect;
@@ -36,6 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *   downstream compatibility.
  */
 final class SourceRecordFactory {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SourceRecordFactory.class);
 
     static final String EVENT_TYPE_FIELD = "_EventType";
     static final String OBJECT_TYPE_FIELD = "_ObjectType";
@@ -240,10 +244,83 @@ final class SourceRecordFactory {
         source.put("connector","salesforce");
         source.put("object",sobject);
 
+        LOG.info("========== DEBEZIUM DEBUG ==========");
+        LOG.info("SObject      : {}", sobject);
+        LOG.info("RecordId     : {}", recordId);
+        LOG.info("ChangeType   : {}", changeType);
+        LOG.info("Before Null? : {}", before == null);
+
+        if (before != null) {
+
+            LOG.info(
+                    "Before Schema Name : {}",
+                    before.schema().name());
+
+            LOG.info(
+                    "Before Field Count : {}",
+                    before.schema().fields().size());
+
+            LOG.info(
+                    "Before Schema : {}",
+                    before.schema());
+        }
+
+        LOG.info(
+                "Value Schema Name : {}",
+                value.schema().name());
+
+        LOG.info(
+                "Value Field Count : {}",
+                value.schema().fields().size());
+
+        LOG.info(
+                "Value Schema : {}",
+                value.schema());
+
         Schema envelopeSchema = buildEnvelopeSchema(valueSchema);
+        LOG.info(
+                "Envelope Before Schema Name : {}",
+                envelopeSchema.field("before")
+                        .schema()
+                        .name());
+
+        LOG.info(
+                "Envelope After Schema Name : {}",
+                envelopeSchema.field("after")
+                        .schema()
+                        .name());
+
+        LOG.info(
+                "Value == EnvelopeAfter ? {}",
+                value.schema().equals(
+                        envelopeSchema
+                                .field("after")
+                                .schema()));
+
+        if (before != null) {
+
+            LOG.info(
+                    "Before == EnvelopeBefore ? {}",
+                    before.schema().equals(
+                            envelopeSchema
+                                    .field("before")
+                                    .schema()));
+        }
+
         Struct envelope =new Struct(envelopeSchema);
         envelope.put("before",before);
-        envelope.put("after", "DELETE".equals(changeType) ? null : value);
+        try {
+            envelope.put("after", "DELETE".equals(changeType) ? null : value);
+            LOG.info("Successfully added AFTER");
+
+        } catch (Exception e) {
+            LOG.error(
+                    "FAILED TO PUT AFTER. valueSchema={}, expectedSchema={}",
+                    value.schema(),
+                    envelopeSchema.field("after").schema(),
+                    e);
+            throw e;
+        }
 
         envelope.put("op",debeziumOp(changeType));
         envelope.put("ts_ms",(Long) header.get("commitTimestamp"));
@@ -405,7 +482,10 @@ final class SourceRecordFactory {
         source.put("object",sobject);
         Schema envelopeSchema = buildEnvelopeSchema(valueSchema);
         Struct envelope = new Struct(envelopeSchema);
-        envelope.put("before",before);
+
+        if (before != null) {
+            envelope.put("before", before);
+        }
         envelope.put("after","deleted".equals(eventType)? null:value);
         envelope.put("op", debeziumBulkOp(eventType));
         envelope.put("ts_ms",System.currentTimeMillis());
@@ -460,11 +540,11 @@ final class SourceRecordFactory {
 
                 .field(
                         "before",
-                        makeOptional(rowSchema))
+                        rowSchema)
 
                 .field(
                         "after",
-                        makeOptional(rowSchema))
+                        rowSchema)
 
                 .field(
                         "op",
