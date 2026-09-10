@@ -308,7 +308,9 @@ final class SourceRecordFactory {
         }
 
         Struct envelope =new Struct(envelopeSchema);
-        envelope.put("before",before);
+        if(before!=null)
+            envelope.put("before",before);
+
         try {
             envelope.put("after", "DELETE".equals(changeType) ? null : value);
             LOG.info("Successfully added AFTER");
